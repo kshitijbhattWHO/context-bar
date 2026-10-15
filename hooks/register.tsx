@@ -32,10 +32,15 @@ const cells = (rows: Row[], max: number, width: number) => {
 const breakdownOf = async ($: EngineInterface, detail: 'summary' | 'full' = 'summary') =>
   (await $.session.usage({ breakdown: detail })).context.breakdown
 
-// CONTEXT_BAR_MAX_TOKENS caps what the bar treats as 100% (e.g. 150000 on a 1M model).
-const capOf = async ($: EngineInterface, raw: number) => {
+// CONTEXT_BAR_MAX_TOKENS is the budget for Messages: 100% is whatever loads up front
+// (system prompt, tools, memory, skills...) plus that many message tokens.
+const capOf = async ($: EngineInterface, b: SessionContextBreakdown) => {
   const n = Number(await $.env.get('CONTEXT_BAR_MAX_TOKENS'))
-  return n > 0 ? n : raw
+  if (!(n > 0)) return b.rawMaxTokens
+  const base = b.categories
+    .filter(c => c.kind === 'used' && c.name !== 'Messages')
+    .reduce((a, c) => a + c.tokens, 0)
+  return base + n
 }
 
 const refresh = async ($: EngineInterface) => {
@@ -44,7 +49,7 @@ const refresh = async ($: EngineInterface) => {
   let rows: Row[] = b.categories
     .filter(c => c.kind !== 'deferred' && c.tokens > 0)
     .map(c => ({ name: c.name, tokens: c.tokens, kind: c.kind as Row['kind'] }))
-  const max = await capOf($, b.rawMaxTokens)
+  const max = await capOf($, b)
   if (max === b.rawMaxTokens) {
     await update($, snapshot, () => ({ rows, max, percent: b.percentage }))
     return
@@ -148,7 +153,7 @@ export const register: Register = on => {
     const deferred = b.categories.find(c => c.kind === 'deferred')
     const shown = all.slice(0, top)
     const w = Math.min(60, Math.max(10, ...shown.map(l => l.name.length)))
-    const max = await capOf($, b.rawMaxTokens)
+    const max = await capOf($, b)
     const percent = max === b.rawMaxTokens ? b.percentage : (b.totalTokens / max) * 100
     const out = [
       `Context: ${kTokens(b.totalTokens)} of ${kTokens(max)} (${Math.round(percent)}%)`,
