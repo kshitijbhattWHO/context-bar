@@ -1,0 +1,6 @@
+{
+  "name": "context-bar",
+  "version": "0.1.0",
+  "description": "Context window as a stacked bar above the prompt, in Hangar 18 colours; /context-bar toggles it",
+  "types": "./types/index.d.ts"
+}
