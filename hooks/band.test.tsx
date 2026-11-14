@@ -178,7 +178,7 @@ test('off a subscription, or with only a spend limit, the limits are hidden', as
   await again.unmount()
 })
 
-test('Details shows the legend and labelled boxes; Compact switches back, and the choice sticks', async ($, on) => {
+test('Details shows the Context, Limits and Busy time boxes; Compact switches back, and the choice sticks', async ($, on) => {
   await start($, on)
   await measure($, LIMITS)
   await turn($, 3 * 3600000 + 5 * MIN)
@@ -210,7 +210,7 @@ test('Details shows the legend and labelled boxes; Compact switches back, and th
   await later.unmount()
 })
 
-test('a legend entry in the detail view still opens its category', async ($, on) => {
+test('a Context cell in the detail view opens its category', async ($, on) => {
   let opened = ''
   await start($, on, {
     hooks: on => {
@@ -225,8 +225,28 @@ test('a legend entry in the detail view still opens its category', async ($, on)
 
   const ui = await $.ui.mount(band(160))
   await ui.press({ key: 'details' })
-  await ui.press({ key: 'b1' })
+  await ui.press({ key: 'cat:Messages' })
   expect(opened).toBe('Messages')
+  await ui.unmount()
+})
+
+test('Details puts the categories in a Context box, largest first, coloured as in the bar', async ($, on) => {
+  await start($, on, { messages: 60000 })
+  await measure($, LIMITS)
+
+  const ui = await $.ui.mount(band(160))
+  await ui.press({ key: 'details' })
+  const box = (await ui.find({ key: 'context' }))!
+  expect(box.text).toContain('Context')
+  const cells = (await ui.findAll({ type: 'Button' })).filter(b => b.key?.startsWith('cat:'))
+  expect(cells.map(c => c.text)).toEqual(['█ Messages 60.0k', '█ Prompt    8.0k'])
+  // Swatches carry the bar's colours: System prompt is first in the bar, Messages second.
+  const swatch = (i: number) => JSON.stringify(cells[i]!.children)
+  expect(swatch(0)).toContain('#00BCFF')
+  expect(swatch(1)).toContain('#6F02E4')
+  // No legend row any more; Limits sits beside the Context box.
+  expect(await ui.find({ key: 'legend' })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: 'Limits' })).toBeDefined()
   await ui.unmount()
 })
 
@@ -285,5 +305,43 @@ test('used segments are split by a thin gap, and the last one runs into free spa
   const segments = await ui.findAll({ type: 'Text', text: /^[█▌]+$/ })
   expect(segments.map(t => t.text.endsWith('▌'))).toEqual([true, false])
   expect(segments[0]!.props.color).toBe('#6F02E4')
+  await ui.unmount()
+})
+
+const pane = {
+  plugin: 'context-bar',
+  surface: 'terminal',
+  component: 'Pane',
+  requestId: 'context-lines',
+  props: { title: 'Context', isFocused: true, bodyColumns: 100 },
+  viewport: { columns: 100, rows: 30 },
+} as never
+
+test('the side pane has a tab per category; pressing one switches the pane', async ($, on) => {
+  await start($, on, {
+    hooks: on => {
+      on('ui.open', () => ({ value: { isPlaced: true } }) as never)
+      on('prompt.compose', () => ({ sections: [{ id: 'lean_body', text: 'x'.repeat(400), scope: 'shared' }] }) as never)
+      on('tool.list', () => ({ value: [] }) as never)
+    },
+  })
+
+  const band160 = await $.ui.mount(band(160))
+  await band160.press({ key: 'details' })
+  await band160.press({ key: 'cat:Messages' })
+  await band160.unmount()
+
+  const ui = await $.ui.mount(pane)
+  const tabs = (await ui.findAll({ type: 'Button' })).filter(b => b.key?.startsWith('tab:'))
+  expect(tabs.map(t => t.text)).toEqual(['▶█ Messages 60.0k', ' █ Prompt 8.0k'])
+  expect(JSON.stringify(tabs[1]!.children)).toContain('#6F02E4')
+  expect(await ui.find({ type: 'Text', text: /lean_body/ })).toBeUndefined()
+
+  await ui.press({ key: 'tab:System prompt' })
+  await ui.redraw()
+  expect((await ui.find({ type: 'Text', text: /^System prompt$/ }))).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /lean_body/ })).toBeDefined()
+  const after = (await ui.findAll({ type: 'Button' })).filter(b => b.key?.startsWith('tab:'))
+  expect(after.map(t => t.text)).toEqual([' █ Messages 60.0k', '▶█ Prompt 8.0k'])
   await ui.unmount()
 })

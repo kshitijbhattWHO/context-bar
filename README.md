@@ -12,7 +12,7 @@ Restart Claude Code.
 
 ## Use
 
-Run `/context-bar` to toggle the bar and band on or off. Click a legend entry for that category's lines, or run `/context-lines [N] [all]` to rank everything in the window.
+Run `/context-bar` to toggle the bar and band on or off. In the detail view, click a category in the Context box to open its lines in a side pane, where each category has its own tab, or run `/context-lines [N] [all]` to rank everything in the window.
 
 By default the bar, its percent, the band and a Details button share one line:
 
@@ -24,7 +24,7 @@ By default the bar, its percent, the band and a Details button share one line:
 - **busy** is how long Claude has worked on your messages in the main conversation, and **turns** is how many messages it has answered. `/clear` resets both.
 - On a narrow terminal, turns go first, then busy time, then the weekly window. The bar always keeps at least 20 cells.
 
-Details switches to the full view: the bar and legend, a Limits box and a Busy time box. Compact switches back. The choice holds for the session.
+Details switches to the full view: the bar, then a Context box (every category, largest first, in two rows), a Limits box and a Busy time box. Compact switches back. The choice holds for the session.
 
 To give messages a fixed budget, set `CONTEXT_BAR_MAX_TOKENS`; 100% then means whatever loads up front (system prompt, tools, memory, skills) plus that many message tokens. Set it in `~/.claude/settings.json`:
 
