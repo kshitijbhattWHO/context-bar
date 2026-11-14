@@ -1,8 +1,8 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, SessionContextBreakdown } from 'claude-code'
 
-import type { Line, Row, Stats } from '../types'
-import { agentTime, fit, level, levelColour, segment, turnsLabel, windowLabel, windowsOf } from './stats'
+import type { Line, Row, Stats, Tab } from '../types'
+import { agentTime, bySize, columnsOf, fit, level, levelColour, segment, shortName, turnsLabel, windowLabel, windowsOf, wrappedRows } from './stats'
 import type { Piece } from './stats'
 
 const PANE = 'context-lines'
@@ -121,10 +121,16 @@ const lines = async ($: EngineInterface, b: SessionContextBreakdown, withTools: 
   return out.sort((a, b) => b.tokens - a.tokens)
 }
 
+// Each used category keeps its colour by its place in the bar.
+const colourOf = (used: readonly Row[], r: Row) => BRAND[used.indexOf(r) % BRAND.length]!
+
 const show = async ($: EngineInterface, category: string) => {
   const b = await breakdownOf($, 'full')
   const all = b ? await lines($, b, true) : []
-  await update($, detail, () => ({ category, lines: all.filter(l => l.category === category) }))
+  const used = (await read($, snapshot))?.rows.filter(r => r.kind === 'used') ?? []
+  const tabs = bySize(used.map(r => ({ name: r.name, tokens: r.tokens, colour: colourOf(used, r) })))
+  // Every category's lines are kept, so switching tabs needs no new count.
+  await update($, detail, () => ({ category, lines: all, tabs }))
   await $.ui.open({ id: PANE, title: category, focus: true, closeOnEscape: true })
 }
 
@@ -167,7 +173,7 @@ export const register: Register = on => {
       `Top ${Math.min(top, all.length)} of ${all.length} lines by tokens:`,
       ...shown.map(l => `${lpad(kTokens(l.tokens), 7)}  ${pad(l.name, w)}  ${l.note}`),
       'Cut: /mcp to disable a server; /plugin to disable a plugin and its skills; CLAUDE.md and memory files by path above.',
-      'Pass "all" to list each MCP tool schema on its own line. Click a row in the context bar for one category.',
+      'Pass "all" to list each MCP tool schema on its own line. In the Details view, click a category for its lines.',
     ]
     return { text: out.filter(Boolean).join('\n') }
   })
@@ -199,8 +205,13 @@ export const register: Register = on => {
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const { Box, Button, Text } = $.ui.resolve(e)
     const d = await read($, detail)
-    const list = d?.lines ?? []
-    const room = Math.max(1, (e.viewport?.rows ?? 24) - 3)
+    const list = (d?.lines ?? []).filter(l => l.category === d?.category)
+    const tabs = d?.tabs ?? []
+    const tabText = (t: Tab) => ` ${shortName(t.name)} ${kTokens(t.tokens)}`
+    // Tabs wrap: estimate their rows so the line items still fit below them.
+    const cols = e.props.bodyColumns || e.viewport?.columns || 80
+    const tabRows = wrappedRows(tabs.map(t => tabText(t).length + 4), cols)
+    const room = Math.max(1, (e.viewport?.rows ?? 24) - 3 - tabRows)
     const shown = list.length > room ? list.slice(0, room - 1) : list
     const w = Math.min(50, Math.max(10, ...shown.map(l => l.name.length)))
     const total = list.reduce((a, l) => a + l.tokens, 0)
@@ -211,6 +222,34 @@ export const register: Register = on => {
           <Text dimColor>{`  ${list.length} lines, ${kTokens(total)} total  `}</Text>
           <Button key="close" label="Close" plain hotkey="q" onPress={() => $.ui.close({ id: PANE })} />
         </Box>
+        {tabs.length > 0 && (
+          <Box key="tabs" flexWrap="wrap">
+            {tabs.map(t => {
+              const isOpen = t.name === d?.category
+              const mark = isOpen ? '▶' : ' '
+              const swatch = <Text key={`ts:${t.name}`} color={t.colour}>█</Text>
+              const pick = () => update($, detail, x => x && { ...x, category: t.name })
+              return (
+                <Box key={`tb:${t.name}`} marginRight={2}>
+                  {e.surface === 'terminal' ? (
+                    <Button key={`tab:${t.name}`} plain dimColor={!isOpen} onPress={pick}>
+                      {mark}
+                      {swatch}
+                      {tabText(t)}
+                    </Button>
+                  ) : (
+                    [
+                      swatch,
+                      <Button key={`tab:${t.name}`} plain dimColor={!isOpen} onPress={pick}>
+                        {`${mark}${tabText(t)}`}
+                      </Button>,
+                    ]
+                  )}
+                </Box>
+              )
+            })}
+          </Box>
+        )}
         {list.length === 0 && <Text dimColor>Nothing itemised for this row.</Text>}
         {shown.map((l, i) => (
           <Text key={`l${i}`}>
@@ -238,7 +277,7 @@ export const register: Register = on => {
     const windows = windowsOf(s.limits)
     const hasBusy = s.turns > 0 || s.busyMs > 0
     const used = snap.rows.filter(r => r.kind === 'used')
-    const colour = (r: Row) => BRAND[used.indexOf(r) % BRAND.length]
+    const colour = (r: Row) => colourOf(used, r)
 
     const bar = (width: number) => {
       // Over the cap the used rows fill the whole bar instead of overflowing it.
@@ -294,31 +333,55 @@ export const register: Register = on => {
           {bar(Math.max(20, columns - label.length - 1))}
           {percent}
         </Text>
-        <Box key="legend" flexWrap="wrap">
-          {used.map((r, i) => (
-            <Box key={`g${i}`}>
-              <Text color={colour(r)}>█</Text>
-              <Button key={`b${i}`} label={` ${r.name} ${kTokens(r.tokens)}  `} plain dimColor onPress={() => show($, r.name)} />
+        <Box key="boxes" flexWrap="wrap">
+          {used.length > 0 && (
+            <Box key="context" flexDirection="column" borderStyle="round" borderDimColor paddingX={1}>
+              <Text bold>Context</Text>
+              <Box key="cells" flexWrap="wrap">
+                {columnsOf(used).map((col, c, all) => {
+                  const nameW = Math.max(...col.map(r => shortName(r.name).length))
+                  const tokW = Math.max(...col.map(r => kTokens(r.tokens).length))
+                  return (
+                    <Box key={`col${c}`} flexDirection="column" marginRight={c < all.length - 1 ? 2 : 0}>
+                      {col.map(r => {
+                        const swatch = <Text key={`sw:${r.name}`} color={colour(r)}>█</Text>
+                        const text = ` ${pad(shortName(r.name), nameW)} ${lpad(kTokens(r.tokens), tokW)}`
+                        const open = () => show($, r.name)
+                        // A desktop's native button drops the colour of text inside it.
+                        return e.surface === 'terminal' ? (
+                          <Button key={`cat:${r.name}`} plain dimColor onPress={open}>
+                            {swatch}
+                            {text}
+                          </Button>
+                        ) : (
+                          <Box key={`cell:${r.name}`}>
+                            {swatch}
+                            <Button key={`cat:${r.name}`} plain dimColor onPress={open}>
+                              {text}
+                            </Button>
+                          </Box>
+                        )
+                      })}
+                    </Box>
+                  )
+                })}
+              </Box>
             </Box>
-          ))}
+          )}
+          {windows.length > 0 && (
+            <Box key="limits" flexDirection="column" borderStyle="round" borderDimColor paddingX={1}>
+              <Text bold>Limits</Text>
+              {windows.map(l => windowText(`d${l.kind}`, l, false))}
+            </Box>
+          )}
+          {hasBusy && (
+            <Box key="busy" flexDirection="column" borderStyle="round" borderDimColor paddingX={1}>
+              <Text bold>Busy time</Text>
+              <Text dimColor>{agentTime(s.busyMs)}</Text>
+              <Text dimColor>{turnsLabel(s.turns)}</Text>
+            </Box>
+          )}
         </Box>
-        {(windows.length > 0 || hasBusy) && (
-          <Box key="boxes" flexWrap="wrap">
-            {windows.length > 0 && (
-              <Box key="limits" flexDirection="column" borderStyle="round" borderDimColor paddingX={1}>
-                <Text bold>Limits</Text>
-                {windows.map(l => windowText(`d${l.kind}`, l, false))}
-              </Box>
-            )}
-            {hasBusy && (
-              <Box key="busy" flexDirection="column" borderStyle="round" borderDimColor paddingX={1}>
-                <Text bold>Busy time</Text>
-                <Text dimColor>{agentTime(s.busyMs)}</Text>
-                <Text dimColor>{turnsLabel(s.turns)}</Text>
-              </Box>
-            )}
-          </Box>
-        )}
         <Button key="compact" label="[Compact]" plain dimColor onPress={() => update($, compact, () => true)} />
       </Box>
     )
