@@ -7,10 +7,10 @@ const NOW = new Date(2026, 10, 14, 10, 0).getTime()
 const MIN = 60000
 const at = (ms: number) => new Date(NOW + ms).toISOString()
 
-const band = (columns: number) =>
+const band = (columns: number, surface: 'terminal' | 'vscode' = 'terminal') =>
   ({
     plugin: 'context-bar',
-    surface: 'terminal',
+    surface,
     component: 'AbovePrompt',
     props: {
       hasSurvey: false,
@@ -343,5 +343,15 @@ test('the side pane has a tab per category; pressing one switches the pane', asy
   expect(await ui.find({ type: 'Text', text: /lean_body/ })).toBeDefined()
   const after = (await ui.findAll({ type: 'Button' })).filter(b => b.key?.startsWith('tab:'))
   expect(after.map(t => t.text)).toEqual([' █ Messages 60.0k', '▶█ Prompt 8.0k'])
+  await ui.unmount()
+})
+
+test('on VS Code the swatch sits beside its cell, since a native button drops colour', async ($, on) => {
+  await start($, on)
+  const ui = await $.ui.mount(band(160, 'vscode'))
+  await ui.press({ key: 'details' })
+  const cells = (await ui.findAll({ type: 'Button' })).filter(b => b.key?.startsWith('cat:'))
+  expect(cells.map(c => c.text)).toEqual([' Messages 60.0k', ' Prompt    8.0k'])
+  expect(JSON.stringify((await ui.find({ key: 'cell:Messages' }))?.children)).toContain('#00BCFF')
   await ui.unmount()
 })

@@ -226,13 +226,25 @@ export const register: Register = on => {
           <Box key="tabs" flexWrap="wrap">
             {tabs.map(t => {
               const isOpen = t.name === d?.category
+              const mark = isOpen ? '▶' : ' '
+              const swatch = <Text key={`ts:${t.name}`} color={t.colour}>█</Text>
+              const pick = () => update($, detail, x => x && { ...x, category: t.name })
               return (
                 <Box key={`tb:${t.name}`} marginRight={2}>
-                  <Button key={`tab:${t.name}`} plain dimColor={!isOpen} onPress={() => update($, detail, x => x && { ...x, category: t.name })}>
-                    {isOpen ? '▶' : ' '}
-                    <Text key={`ts:${t.name}`} color={t.colour}>█</Text>
-                    {tabText(t)}
-                  </Button>
+                  {e.surface === 'terminal' ? (
+                    <Button key={`tab:${t.name}`} plain dimColor={!isOpen} onPress={pick}>
+                      {mark}
+                      {swatch}
+                      {tabText(t)}
+                    </Button>
+                  ) : (
+                    [
+                      swatch,
+                      <Button key={`tab:${t.name}`} plain dimColor={!isOpen} onPress={pick}>
+                        {`${mark}${tabText(t)}`}
+                      </Button>,
+                    ]
+                  )}
                 </Box>
               )
             })}
@@ -331,12 +343,25 @@ export const register: Register = on => {
                   const tokW = Math.max(...col.map(r => kTokens(r.tokens).length))
                   return (
                     <Box key={`col${c}`} flexDirection="column" marginRight={c < all.length - 1 ? 2 : 0}>
-                      {col.map(r => (
-                        <Button key={`cat:${r.name}`} plain dimColor onPress={() => show($, r.name)}>
-                          <Text key={`sw:${r.name}`} color={colour(r)}>█</Text>
-                          {` ${pad(shortName(r.name), nameW)} ${lpad(kTokens(r.tokens), tokW)}`}
-                        </Button>
-                      ))}
+                      {col.map(r => {
+                        const swatch = <Text key={`sw:${r.name}`} color={colour(r)}>█</Text>
+                        const text = ` ${pad(shortName(r.name), nameW)} ${lpad(kTokens(r.tokens), tokW)}`
+                        const open = () => show($, r.name)
+                        // A desktop's native button drops the colour of text inside it.
+                        return e.surface === 'terminal' ? (
+                          <Button key={`cat:${r.name}`} plain dimColor onPress={open}>
+                            {swatch}
+                            {text}
+                          </Button>
+                        ) : (
+                          <Box key={`cell:${r.name}`}>
+                            {swatch}
+                            <Button key={`cat:${r.name}`} plain dimColor onPress={open}>
+                              {text}
+                            </Button>
+                          </Box>
+                        )
+                      })}
                     </Box>
                   )
                 })}
