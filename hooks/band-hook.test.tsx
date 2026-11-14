@@ -75,6 +75,9 @@ const LIMITS: SessionRateLimit[] = [
   { kind: 'spend_limit', percentUsed: 99 },
 ]
 
+// What the band says is tested in band.test.ts through band(); these check the hooks that
+// read the engine, draw the parts and answer presses.
+
 const barCells = (text: string) => (text.match(/[█▌░▒]/g) ?? []).length
 
 test('compact at 160 columns: bar, percent, both windows, busy time, turns, cache and Details on one line', async ($, on) => {
@@ -97,34 +100,6 @@ test('compact at 160 columns: bar, percent, both windows, busy time, turns, cach
   await ui.unmount()
 })
 
-test('compact at 80 columns drops turns, busy time, then weekly before the cache, and keeps the bar at 20 cells or more', async ($, on) => {
-  await start($, on)
-  await measure($, LIMITS)
-  await turn($, 3134000)
-
-  const ui = await $.ui.mount(band(80))
-  const line = (await ui.find({ key: 'compact-line' }))!.text
-  expect(line).toContain(' 34% of 200.0k  5h ▰▰▱▱▱ 38%  cache 1h left  [Details]')
-  expect(line).not.toContain('busy')
-  expect(line).not.toContain('turns')
-  expect(line).not.toContain('wk')
-  expect(barCells(line)).toBe(26)
-  await ui.unmount()
-
-  const narrow = await $.ui.mount(band(60))
-  const short = (await narrow.find({ key: 'compact-line' }))!.text
-  expect(short).toContain('5h ▰▰▱▱▱ 38%')
-  expect(short).not.toContain('wk')
-  expect(barCells(short)).toBeGreaterThanOrEqual(20)
-  await narrow.unmount()
-
-  const tiny = await $.ui.mount(band(30))
-  const none = (await tiny.find({ key: 'compact-line' }))!.text
-  expect(none).not.toContain('5h')
-  expect(barCells(none)).toBe(20)
-  await tiny.unmount()
-})
-
 test('windows turn yellow at 70%, pink at 90%, and show when they reset', async ($, on) => {
   const clock = await start($, on)
   await measure($, [
@@ -144,23 +119,6 @@ test('windows turn yellow at 70%, pink at 90%, and show when they reset', async 
   await clock.advance(10 * MIN)
   await ui.redraw()
   expect((await ui.find({ type: 'Text', text: /^5h / }))?.text).toBe('5h ▰▰▰▰▰ 92% ↻ 1h 30m')
-  await ui.unmount()
-})
-
-test('the percent label warns at the same thresholds as the windows', async ($, on) => {
-  await start($, on, { messages: 136000 }) // 144k of 200k = 72%
-
-  const ui = await $.ui.mount(band(160))
-  expect((await ui.find({ type: 'Text', text: /^ 72% of 200.0k$/ }))?.props.color).toBe('#FFDB35')
-  await ui.unmount()
-})
-
-test('a window with no reset time shows none', async ($, on) => {
-  await start($, on)
-  await measure($, [{ kind: 'five_hour', percentUsed: 95 }])
-
-  const ui = await $.ui.mount(band(160))
-  expect((await ui.find({ type: 'Text', text: /^5h / }))?.text).toBe('5h ▰▰▰▰▰ 95%')
   await ui.unmount()
 })
 
@@ -298,15 +256,6 @@ test('CONTEXT_BAR_MAX_TOKENS still sets what 100% means in the band', async ($, 
   const ui = await $.ui.mount(band(160))
   // 68k used against 8k up front + 120k of messages.
   expect((await ui.find({ key: 'compact-line' }))!.text).toContain(' 53% of 128.0k')
-  await ui.unmount()
-})
-
-test('used segments are split by a thin gap, and the last one runs into free space', async ($, on) => {
-  await start($, on)
-  const ui = await $.ui.mount(band(160))
-  const segments = await ui.findAll({ type: 'Text', text: /^[█▌]+$/ })
-  expect(segments.map(t => t.text.endsWith('▌'))).toEqual([true, false])
-  expect(segments[0]!.props.color).toBe('#6F02E4')
   await ui.unmount()
 })
 
