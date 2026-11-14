@@ -87,11 +87,11 @@ test('compact at 160 columns: bar, percent, both windows, busy time, turns, cach
 
   const ui = await $.ui.mount(band(160))
   const line = (await ui.find({ key: 'compact-line' }))!.text
-  expect(line).toContain(' 34% of 200.0k  5h ▰▰▱▱▱ 38%  wk ▰▰▰▱▱ 62%  busy 52m 14s · 33 turns  cache 1h left  [Details]')
+  expect(line).toContain(' 34% of 200.0k  5h ▰▰▱▱▱ 38%  wk ▰▰▰▱▱ 62%  busy 52m · 33 turns  cache 1h left  [Details]')
   expect(line).not.toContain('99%')
   expect(line).not.toContain('↻')
   // The bar takes every cell the band leaves over.
-  expect(barCells(line)).toBe(160 - ' 34% of 200.0k  5h ▰▰▱▱▱ 38%  wk ▰▰▰▱▱ 62%  busy 52m 14s · 33 turns  cache 1h left  [Details]'.length)
+  expect(barCells(line)).toBe(160 - ' 34% of 200.0k  5h ▰▰▱▱▱ 38%  wk ▰▰▰▱▱ 62%  busy 52m · 33 turns  cache 1h left  [Details]'.length)
   // Under 70% the windows and the percent label stay quiet.
   expect((await ui.find({ type: 'Text', text: /^5h ▰▰▱▱▱ 38%$/ }))?.props.dimColor).toBe(true)
   expect((await ui.find({ type: 'Text', text: /^ 34% of 200.0k$/ }))?.props.color).toBeUndefined()
@@ -346,7 +346,7 @@ test('Details has a Cache box; CONTEXT_BAR_CACHE_TTL_MIN sets the lifetime; /cle
   await ui.press({ key: 'details' })
   const box = (await ui.find({ key: 'cache' }))!.text
   expect(box).toContain('Cache')
-  expect(box).toContain('warm, 3m left')
+  expect(box).toContain('warm · 3m left')
   expect(box).toContain('idle 2m')
   await ui.unmount()
 
@@ -376,7 +376,7 @@ test('a compaction turns the cache cold at once, until the next main turn re-cac
   await clock.advance(3 * MIN)
   await ui.press({ key: 'details' })
   const box = (await ui.find({ key: 'cache' }))!.text
-  expect(box).toContain('cold, compacted')
+  expect(box).toContain('cold · compacted')
   expect(box).toContain('idle 3m')
   expect(box).toContain('next message re-caches ~68.0k')
   await ui.unmount()
@@ -384,7 +384,7 @@ test('a compaction turns the cache cold at once, until the next main turn re-cac
   await turn($, 1000)
   const warm = await $.ui.mount(band(160))
   const again = (await warm.find({ key: 'cache' }))!.text
-  expect(again).toContain('warm, 1h left')
+  expect(again).toContain('warm · 1h left')
   expect(again).not.toContain('re-caches')
   await warm.unmount()
 })
