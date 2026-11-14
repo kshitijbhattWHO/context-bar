@@ -76,3 +76,38 @@ test('CONTEXT_BAR_MAX_TOKENS caps what counts as 100%', async ($, on) => {
   })
   expect(text.split('\n')[0]).toBe('Context: 75.0k of 150.0k (50%)')
 })
+
+test('/context-lines reports the same used total and percent as the bar, not the engine total', async ($, on) => {
+  on('env.get', () => ({ value: '150000' }) as never)
+  on('session.usage', () => ({ value: {
+    window: 1000000,
+    context: {
+      window: 1000000,
+      breakdown: {
+        categories: [
+          { name: 'System prompt', tokens: 5000, kind: 'used', color: 'inactive', isDeferred: false },
+          { name: 'Messages', tokens: 70000, kind: 'used', color: 'inactive', isDeferred: false },
+        ],
+        // The engine's own total can differ from the categories the bar draws.
+        totalTokens: 90000,
+        maxTokens: 1000000,
+        rawMaxTokens: 1000000,
+        percentage: 9,
+        memoryFiles: [],
+        mcpTools: [],
+        agents: [],
+      },
+    },
+  } }) as never)
+  on('prompt.compose', () => ({ sections: [] }) as never)
+  on('tool.list', () => ({ value: [] }) as never)
+
+  const { text = '' } = await $.command.run({
+    command: 'context-lines',
+    args: '',
+    origin: { kind: 'composer' },
+    presentation: { isFullscreen: false, columns: 120 },
+  })
+  // 75k used of 5k up front + 150k budget, as the bar measures it.
+  expect(text.split('\n')[0]).toBe('Context: 75.0k of 155.0k (48%)')
+})

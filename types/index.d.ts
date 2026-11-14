@@ -1,5 +1,6 @@
 export type Row = { name: string; tokens: number; kind: 'used' | 'free' | 'buffer' }
-export type Snapshot = { rows: Row[]; max: number; percent: number }
+// usedTokens: the used categories added up; percent is it over max.
+export type Snapshot = { rows: Row[]; max: number; percent: number; usedTokens: number }
 export type Line = { category: string; kind: string; name: string; tokens: number; note: string }
 // One tab of the side pane: a used category, with its colour in the bar.
 export type Tab = { name: string; tokens: number; colour: string }

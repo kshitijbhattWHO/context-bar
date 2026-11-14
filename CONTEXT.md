@@ -11,6 +11,10 @@ _Avoid_: the project (ambiguous with this repo)
 **Band**:
 The whole row above the prompt: the context bar and its percent, then the stats beside it (rate limits, busy time, the cache countdown). In compact view it is one line; Details opens it into boxes. It does not track the working project's tests.
 
+**Message budget**:
+How many message tokens count as 100% of the context, on top of what loads up front (system prompt, tools, memory, skills). Set by `CONTEXT_BAR_MAX_TOKENS`; without it, 100% is the model's context window.
+_Avoid_: cap, max tokens, window (taken by **Rate-limit window**)
+
 **Rate-limit window**:
 One of the account's usage limits, such as the 5-hour window or the weekly window, shown as how full it is and when it resets.
 _Avoid_: quota, spend
