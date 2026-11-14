@@ -9,7 +9,7 @@ The repository or folder Claude Code is working in for this session. Not the mod
 _Avoid_: the project (ambiguous with this repo)
 
 **Project tests**:
-The pass/fail result of the working project's own test suite, as last seen in this session. Changes from project to project.
+The pass/fail result of the working project's own test suite, as last seen in this session. Changes from project to project. Many projects never run tests, so the band leaves it out until a test run is seen.
 _Avoid_: the mod's tests, test coverage
 
 **Band**:
