@@ -58,10 +58,17 @@ const meter = (percent: number) => {
 
 const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 
-const countdown = (ms: number) => {
-  const m = Math.max(1, Math.ceil(ms / 60000))
+// Every length of time the band shows, in one shape: `12m`, `2h` or `2h 13m`, `3d` or `3d 4h`.
+// Time left rounds up, so it never reads 0 while time remains; time elapsed rounds down and,
+// under a minute, reads in seconds: `45s`.
+const duration = (ms: number, round: 'up' | 'down') => {
+  if (round === 'down' && ms < 60000) return `${Math.max(0, Math.floor(ms / 1000))}s`
+  const m = round === 'up' ? Math.max(1, Math.ceil(ms / 60000)) : Math.floor(ms / 60000)
   const h = Math.floor(m / 60)
-  return h > 0 ? `${h}h ${m % 60}m` : `${m}m`
+  const d = Math.floor(h / 24)
+  const pair = (big: number, unit: string, small: number, smallUnit: string) =>
+    small ? `${big}${unit} ${small}${smallUnit}` : `${big}${unit}`
+  return d > 0 ? pair(d, 'd', h % 24, 'h') : h > 0 ? pair(h, 'h', m % 60, 'm') : `${m}m`
 }
 
 // When the window resets, once it is 70% full: a countdown for 5h, local weekday and time for weekly.
@@ -69,7 +76,7 @@ const resetLabel = (limit: SessionRateLimit, now: number) => {
   if (level(limit.percentUsed) === 'normal' || !limit.resetsAt) return undefined
   const at = new Date(limit.resetsAt)
   if (Number.isNaN(at.getTime())) return undefined
-  if (limit.kind === 'five_hour') return at.getTime() > now ? `↻ ${countdown(at.getTime() - now)}` : undefined
+  if (limit.kind === 'five_hour') return at.getTime() > now ? `↻ ${duration(at.getTime() - now, 'up')}` : undefined
   return `↻ ${DAYS[at.getDay()]} ${at.getHours()}:${String(at.getMinutes()).padStart(2, '0')}`
 }
 
@@ -78,13 +85,6 @@ const windowLabel = (limit: SessionRateLimit, now: number, compact: boolean) => 
   const reset = resetLabel(limit, now)
   const base = `${windowName(limit.kind, compact)} ${meter(limit.percentUsed)} ${Math.round(limit.percentUsed)}%`
   return reset ? `${base} ${reset}` : base
-}
-
-const agentTime = (ms: number) => {
-  const s = Math.round(ms / 1000)
-  const h = Math.floor(s / 3600)
-  const m = Math.floor((s % 3600) / 60)
-  return h > 0 ? `${h}h ${m}m` : m > 0 ? `${m}m ${s % 60}s` : `${s}s`
 }
 
 const turnsLabel = (n: number) => `${n} ${n === 1 ? 'turn' : 'turns'}`
@@ -105,14 +105,6 @@ const fit = (columns: number, fixed: number, droppable: readonly Piece[]) => {
   const room = () => columns - fixed - kept.reduce((a, p) => a + p.width, 0)
   while (kept.length > 0 && room() < MIN_BAR) kept.shift()
   return { keep: kept.map(p => p.id), bar: Math.max(MIN_BAR, room()) }
-}
-
-// A length of time to the minute: `48m`, `2h 13m`, `3d 4h`.
-const span = (ms: number) => {
-  const m = Math.max(0, Math.floor(ms / 60000))
-  const h = Math.floor(m / 60)
-  const d = Math.floor(h / 24)
-  return d > 0 ? `${d}d ${h % 24}h` : h > 0 ? (m % 60 ? `${h}h ${m % 60}m` : `${h}h`) : `${m}m`
 }
 
 // Prompt cache lifetime on a subscription; CONTEXT_BAR_CACHE_TTL_MIN overrides it.
@@ -144,10 +136,10 @@ const cacheOf = (s: { lastAt?: number; compactedAt?: number }, now: number, ttlM
 // The compact line's text: `cache 48m left`, `cache cold · idle 2h 13m`, or `cache cold · compacted`.
 const cacheLabel = (c: Cache) =>
   c.isWarm
-    ? `cache ${span(c.leftMs + 59999)} left`
+    ? `cache ${duration(c.leftMs, 'up')} left`
     : c.reason === 'compacted'
       ? 'cache cold · compacted'
-      : `cache cold · idle ${span(c.idleMs)}`
+      : `cache cold · idle ${duration(c.idleMs, 'down')}`
 
 const GAP = '  '
 const DETAILS = '[Details]'
@@ -192,7 +184,7 @@ export const band = ({ snapshot: snap, stats: s, compact, now, ttlMs, columns }:
   const cache = cacheOf(s, now, ttlMs ?? CACHE_TTL_MIN * 60000)
 
   if (compact) {
-    const busy = `${GAP}busy ${agentTime(s.busyMs)}`
+    const busy = `${GAP}busy ${duration(s.busyMs, 'down')}`
     const turns = ` · ${turnsLabel(s.turns)}`
     const cacheLine = cache && `${GAP}${cacheLabel(cache)}`
     // In drop order: turns, busy time, weekly window, cache, 5-hour window.
@@ -237,17 +229,17 @@ export const band = ({ snapshot: snap, stats: s, compact, now, ttlMs, columns }:
     limits: windows.map(l => windowPart(`d${l.kind}`, l, false)),
     busy: hasBusy
       ? [
-          { id: 'busy-time', text: agentTime(s.busyMs), dim: true },
+          { id: 'busy-time', text: duration(s.busyMs, 'down'), dim: true },
           { id: 'busy-turns', text: turnsLabel(s.turns), dim: true },
         ]
       : undefined,
     cache: cache && [
       coloured(
         'cache-state',
-        cache.isWarm ? `warm, ${span(cache.leftMs + 59999)} left` : cache.reason === 'compacted' ? 'cold, compacted' : 'cold',
+        cache.isWarm ? `warm · ${duration(cache.leftMs, 'up')} left` : cache.reason === 'compacted' ? 'cold · compacted' : 'cold',
         cache.colour,
       ),
-      { id: 'idle', text: `idle ${span(cache.idleMs)}`, dim: true },
+      { id: 'idle', text: `idle ${duration(cache.idleMs, 'down')}`, dim: true },
       ...(cache.isWarm ? [] : [{ id: 'recache', text: `next message re-caches ~${kTokens(snap.usedTokens)}`, dim: true }]),
     ],
   }

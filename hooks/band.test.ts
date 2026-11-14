@@ -51,7 +51,7 @@ const limitsText = (limits: Limit[]) => detailOf({ stats: { ...NO_STATS, limits 
 test('compact: bar, percent, both windows, busy time, turns and cache fill the line exactly', async () => {
   const b = compactOf({ stats: BUSY })
   const line = text(b.line)
-  expect(line).toContain(' 34% of 200.0k  5h ▰▰▱▱▱ 38%  wk ▰▰▰▱▱ 62%  busy 52m 14s · 33 turns  cache 1h left  ')
+  expect(line).toContain(' 34% of 200.0k  5h ▰▰▱▱▱ 38%  wk ▰▰▰▱▱ 62%  busy 52m · 33 turns  cache 1h left  ')
   expect(b.details).toBe('[Details]')
   expect(line.length + b.details.length).toBe(160)
   expect(line).not.toContain('99%')
@@ -117,12 +117,12 @@ test('a window shows when it resets from 70%: a countdown for 5h, the local week
   expect(limitsText([{ kind: 'five_hour', percentUsed: 95 }])).toEqual(['5-hour ▰▰▰▰▰ 95%'])
   expect(limitsText([{ kind: 'five_hour', percentUsed: 95, resetsAt: 'soon' }])).toEqual(['5-hour ▰▰▰▰▰ 95%'])
   expect(text(compactOf({ stats: { ...NO_STATS, limits: [{ kind: 'five_hour', percentUsed: 80, resetsAt: at(60 * MIN) }] } }).line))
-    .toContain('  5h ▰▰▰▰▱ 80% ↻ 1h 0m')
+    .toContain('  5h ▰▰▰▰▱ 80% ↻ 1h')
 })
 
 test('busy time and turns read short, and stay out until there is a turn', async () => {
   const busy = (busyMs: number, turns: number) => detailOf({ stats: { ...NO_STATS, busyMs, turns } }).busy?.map(p => p.text)
-  expect(busy(3134000, 33)).toEqual(['52m 14s', '33 turns'])
+  expect(busy(3134000, 33)).toEqual(['52m', '33 turns'])
   expect(busy(45000, 1)).toEqual(['45s', '1 turn'])
   expect(busy(3 * 3600000 + 5 * MIN, 2)).toEqual(['3h 5m', '2 turns'])
   expect(busy(0, 0)).toBeUndefined()
@@ -144,11 +144,11 @@ test('the cache counts down from the last main turn: quiet, yellow in its last 1
 test('Details: a Cache box that says when the next message re-caches the window', async () => {
   const box = (stats: Stats, ttlMs?: number) => detailOf({ stats, ttlMs }).cache?.map(p => p.text)
   expect(box(NO_STATS)).toBeUndefined()
-  expect(box({ ...NO_STATS, lastAt: NOW - 2 * MIN }, 5 * MIN)).toEqual(['warm, 3m left', 'idle 2m'])
-  expect(box({ ...NO_STATS, lastAt: NOW })).toEqual(['warm, 1h left', 'idle 0m'])
+  expect(box({ ...NO_STATS, lastAt: NOW - 2 * MIN }, 5 * MIN)).toEqual(['warm · 3m left', 'idle 2m'])
+  expect(box({ ...NO_STATS, lastAt: NOW })).toEqual(['warm · 1h left', 'idle 0s'])
   expect(box({ ...NO_STATS, lastAt: NOW - 61 * MIN })).toEqual(['cold', 'idle 1h 1m', 'next message re-caches ~68.0k'])
   expect(box({ ...NO_STATS, lastAt: NOW - 5 * MIN, compactedAt: NOW - 3 * MIN })).toEqual([
-    'cold, compacted',
+    'cold · compacted',
     'idle 3m',
     'next message re-caches ~68.0k',
   ])
@@ -173,4 +173,23 @@ test('Details: Context cells, largest first in 2 rows, padded per column, each w
     ],
     [{ category: 'System prompt', text: ' Prompt 8.0k', swatch: '#6F02E4' }],
   ])
+})
+
+test('every length of time reads the same way: time left rounds up, time elapsed rounds down, seconds under a minute', async () => {
+  const idle = (ms: number) => detailOf({ stats: { ...NO_STATS, lastAt: NOW - ms } }).cache?.[1]?.text
+  const left = (ms: number) => detailOf({ stats: { ...NO_STATS, lastAt: NOW - (60 * MIN - ms) } }).cache?.[0]?.text
+  expect(idle(30000)).toBe('idle 30s')
+  expect(idle(MIN + 59000)).toBe('idle 1m')
+  expect(idle(2 * 60 * MIN)).toBe('idle 2h')
+  expect(idle(26 * 60 * MIN + 59 * MIN)).toBe('idle 1d 2h')
+  expect(idle(48 * 60 * MIN)).toBe('idle 2d')
+  expect(left(1000)).toBe('warm · 1m left')
+  expect(left(MIN + 1000)).toBe('warm · 2m left')
+  const busy = (ms: number) => detailOf({ stats: { ...NO_STATS, busyMs: ms, turns: 1 } }).busy?.[0]?.text
+  expect(busy(59900)).toBe('59s')
+  expect(busy(3 * 60 * MIN)).toBe('3h')
+  expect(busy(25 * 60 * MIN)).toBe('1d 1h')
+  const reset = (ms: number) => limitsText([{ kind: 'five_hour', percentUsed: 95, resetsAt: at(ms) }])[0]
+  expect(reset(30000)).toBe('5-hour ▰▰▰▰▰ 95% ↻ 1m')
+  expect(reset(2 * 60 * MIN)).toBe('5-hour ▰▰▰▰▰ 95% ↻ 2h')
 })

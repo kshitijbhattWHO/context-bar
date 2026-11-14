@@ -17,7 +17,7 @@ Run `/context-bar` to toggle the bar and band on or off. In the detail view, cli
 By default the bar, its percent, the band and a Details button share one line:
 
 ```
-██████████░░░░░░░░░░ 34% of 200.0k  5h ▰▰▱▱▱ 38%  wk ▰▰▰▱▱ 62%  busy 52m 14s · 33 turns  cache 47m left  [Details]
+██████████░░░░░░░░░░ 34% of 200.0k  5h ▰▰▱▱▱ 38%  wk ▰▰▰▱▱ 62%  busy 52m · 33 turns  cache 47m left  [Details]
 ```
 
 - **5h** and **wk** are your 5-hour and weekly rate-limit windows. Each turns yellow at 70% and pink at 90%, and shows when it resets once it passes 70% (a countdown for 5h, a local day and time for weekly). On a Claude gateway the spend limit is left out; off a subscription the limits are hidden.
