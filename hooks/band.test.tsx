@@ -74,7 +74,7 @@ const LIMITS: SessionRateLimit[] = [
   { kind: 'spend_limit', percentUsed: 99 },
 ]
 
-const barCells = (text: string) => (text.match(/[█░▒]/g) ?? []).length
+const barCells = (text: string) => (text.match(/[█▌░▒]/g) ?? []).length
 
 test('compact at 160 columns: bar, percent, both windows, busy time, turns and Details on one line', async ($, on) => {
   await start($, on)
@@ -276,5 +276,14 @@ test('CONTEXT_BAR_MAX_TOKENS still sets what 100% means in the band', async ($, 
   const ui = await $.ui.mount(band(160))
   // 68k used against 8k up front + 120k of messages.
   expect((await ui.find({ key: 'compact-line' }))!.text).toContain(' 53% of 128.0k')
+  await ui.unmount()
+})
+
+test('used segments are split by a thin gap, and the last one runs into free space', async ($, on) => {
+  await start($, on)
+  const ui = await $.ui.mount(band(160))
+  const segments = await ui.findAll({ type: 'Text', text: /^[█▌]+$/ })
+  expect(segments.map(t => t.text.endsWith('▌'))).toEqual([true, false])
+  expect(segments[0]!.props.color).toBe('#6F02E4')
   await ui.unmount()
 })
