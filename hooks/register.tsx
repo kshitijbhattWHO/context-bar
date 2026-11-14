@@ -2,9 +2,9 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, SessionContextBreakdown } from 'claude-code'
 
 import type { Line, Row, Stats, Tab } from '../types'
-import { bySize, colourOf, columnsOf, kTokens, lpad, pad, shortName, wrappedRows } from './categories'
-import { agentTime, CACHE_TTL_MIN, cacheLabel, cacheOf, fit, level, levelColour, segment, span, turnsLabel, windowLabel, windowsOf } from './stats'
-import type { Piece } from './stats'
+import { bySize, colourOf, kTokens, lpad, pad, shortName, wrappedRows } from './categories'
+import { band } from './band'
+import type { Part } from './band'
 
 const PANE = 'context-lines'
 
@@ -16,24 +16,12 @@ const stats = atom({ plugin: 'context-bar', key: 'stats' } as const, NO_STATS)
 const compact = atom({ plugin: 'context-bar', key: 'compact' } as const, true)
 const tick = atom({ plugin: 'context-bar', key: 'tick' } as const, 0)
 
+// CONTEXT_BAR_CACHE_TTL_MIN overrides the prompt cache's lifetime; absent, the band's default.
 const ttlOf = async ($: EngineInterface) => {
   const n = Number(await $.env.get('CONTEXT_BAR_CACHE_TTL_MIN'))
-  return (n > 0 ? n : CACHE_TTL_MIN) * 60000
+  return n > 0 ? n * 60000 : undefined
 }
 
-
-// Largest-remainder split: the cells always add up to exactly `width`.
-const cells = (rows: Row[], max: number, width: number) => {
-  const exact = rows.map(r => (max > 0 ? (r.tokens / max) * width : 0))
-  const out = exact.map(Math.floor)
-  let left = width - out.reduce((a, b) => a + b, 0)
-  const order = exact.map((x, i) => [x - Math.floor(x), i] as const).sort((a, b) => b[0] - a[0])
-  for (let j = 0; left > 0 && order.length > 0; j = (j + 1) % order.length, left--) {
-    const i = order[j]![1]
-    out[i] = out[i]! + 1
-  }
-  return out
-}
 
 // `full` counts each tool and file like /context does; `summary` is a free local estimate.
 const breakdownOf = async ($: EngineInterface, detail: 'summary' | 'full' = 'summary') =>
@@ -285,142 +273,75 @@ export const register: Register = on => {
     const snap = await read($, snapshot)
     if (e.props.hasSurvey || !snap || !(await read($, isOn))) return next(e)
     const { Box, Button, Text } = $.ui.resolve(e)
-    const s = await read($, stats)
-    const isCompact = await read($, compact)
     await read($, tick)
-    const now = await $.clock.now()
-    const cache = cacheOf(s, now, await ttlOf($))
-    const cacheText = (key: string, text: string) =>
-      cache?.colour ? <Text key={key} color={cache.colour}>{text}</Text> : <Text key={key} dimColor>{text}</Text>
-    const columns = e.props.bodyColumns || e.viewport?.columns || 80
-    const label = ` ${Math.round(snap.percent)}% of ${kTokens(snap.max)}`
-    const labelColour = levelColour(level(snap.percent))
-    const windows = windowsOf(s.limits)
-    const hasBusy = s.turns > 0 || s.busyMs > 0
-    const used = snap.rows.filter(r => r.kind === 'used')
-    // What the next request sends again: everything in the window now.
-    const recache = used.reduce((a, r) => a + r.tokens, 0)
-    const colour = (r: Row) => colourOf(used, r)
-
-    const bar = (width: number) => {
-      // Over the cap the used rows fill the whole bar instead of overflowing it.
-      const widths = cells(snap.rows, Math.max(snap.max, snap.rows.reduce((a, r) => a + r.tokens, 0)), width)
-      // A used segment that meets another used one ends in a half block, leaving a thin gap.
-      const nextShown = (i: number) => snap.rows.find((_, j) => j > i && (widths[j] ?? 0) > 0)
-      return snap.rows.map((r, i) =>
-        r.kind === 'used' ? (
-          <Text key={`s${i}`} color={colour(r)}>{segment(widths[i] ?? 0, nextShown(i)?.kind === 'used')}</Text>
-        ) : (
-          <Text key={`s${i}`} dimColor>{(r.kind === 'free' ? '░' : '▒').repeat(widths[i] ?? 0)}</Text>
-        ),
+    const b = band({
+      snapshot: snap,
+      stats: await read($, stats),
+      compact: await read($, compact),
+      now: await $.clock.now(),
+      ttlMs: await ttlOf($),
+      columns: e.props.bodyColumns || e.viewport?.columns || 80,
+    })
+    const draw = (p: Part) =>
+      p.colour ? (
+        <Text key={p.id} color={p.colour}>{p.text}</Text>
+      ) : p.dim ? (
+        <Text key={p.id} dimColor>{p.text}</Text>
+      ) : (
+        <Text key={p.id}>{p.text}</Text>
       )
-    }
-    const percent = labelColour ? <Text key="pct" color={labelColour}>{label}</Text> : <Text key="pct">{label}</Text>
-    const windowText = (key: string, l: (typeof windows)[number], short: boolean) => {
-      const c = levelColour(level(l.percentUsed))
-      const text = windowLabel(l, now, short)
-      return c ? <Text key={key} color={c}>{text}</Text> : <Text key={key} dimColor>{text}</Text>
-    }
+    const box = (key: string, title: string, parts: Part[]) => (
+      <Box key={key} flexDirection="column" borderStyle="round" borderDimColor paddingX={1}>
+        <Text bold>{title}</Text>
+        {parts.map(draw)}
+      </Box>
+    )
 
-    if (isCompact) {
-      const GAP = '  '
-      const details = '[Details]'
-      const busy = `${GAP}busy ${agentTime(s.busyMs)}`
-      const turns = ` · ${turnsLabel(s.turns)}`
-      const cacheLine = cache && `${GAP}${cacheLabel(cache)}`
-      // In drop order: turns, busy time, weekly window, cache, 5-hour window.
-      const [fiveHour, weekly] = [windows.filter(l => l.kind === 'five_hour'), windows.filter(l => l.kind !== 'five_hour')]
-      const windowPiece = (l: (typeof windows)[number]) => ({ id: l.kind, width: GAP.length + windowLabel(l, now, true).length })
-      const pieces: Piece[] = [
-        ...(hasBusy ? [{ id: 'turns', width: turns.length }, { id: 'busy', width: busy.length }] : []),
-        ...weekly.map(windowPiece),
-        ...(cacheLine ? [{ id: 'cache', width: cacheLine.length }] : []),
-        ...fiveHour.map(windowPiece),
-      ]
-      const { keep, bar: barWidth } = fit(columns, label.length + GAP.length + details.length, pieces)
+    if (b.view === 'compact') {
       return (
         <Box key="compact-line">
-          <Text>
-            {bar(barWidth)}
-            {percent}
-            {windows
-              .filter(l => keep.includes(l.kind))
-              .flatMap(l => [<Text key={`g${l.kind}`}>{GAP}</Text>, windowText(`w${l.kind}`, l, true)])}
-            {keep.includes('busy') && <Text key="busy" dimColor>{busy}</Text>}
-            {keep.includes('turns') && <Text key="turns" dimColor>{turns}</Text>}
-            {cacheLine && keep.includes('cache') && cacheText('cache', cacheLine)}
-            {GAP}
-          </Text>
-          <Button key="details" label={details} plain dimColor onPress={() => update($, compact, () => false)} />
+          <Text>{b.line.map(draw)}</Text>
+          <Button key="details" label={b.details} plain dimColor onPress={() => update($, compact, () => false)} />
         </Box>
       )
     }
 
     return (
       <Box key="detail-view" flexDirection="column">
-        <Text>
-          {bar(Math.max(20, columns - label.length - 1))}
-          {percent}
-        </Text>
+        <Text>{b.bar.map(draw)}</Text>
         <Box key="boxes" flexWrap="wrap">
-          {used.length > 0 && (
+          {b.context.length > 0 && (
             <Box key="context" flexDirection="column" borderStyle="round" borderDimColor paddingX={1}>
               <Text bold>Context</Text>
               <Box key="cells" flexWrap="wrap">
-                {columnsOf(used).map((col, c, all) => {
-                  const nameW = Math.max(...col.map(r => shortName(r.name).length))
-                  const tokW = Math.max(...col.map(r => kTokens(r.tokens).length))
-                  return (
-                    <Box key={`col${c}`} flexDirection="column" marginRight={c < all.length - 1 ? 2 : 0}>
-                      {col.map(r => {
-                        const swatch = <Text key={`sw:${r.name}`} color={colour(r)}>█</Text>
-                        const text = ` ${pad(shortName(r.name), nameW)} ${lpad(kTokens(r.tokens), tokW)}`
-                        const open = () => show($, r.name)
-                        // A desktop's native button drops the colour of text inside it.
-                        return e.surface === 'terminal' ? (
-                          <Button key={`cat:${r.name}`} plain dimColor onPress={open}>
-                            {swatch}
-                            {text}
+                {b.context.map((col, c, all) => (
+                  <Box key={`col${c}`} flexDirection="column" marginRight={c < all.length - 1 ? 2 : 0}>
+                    {col.map(cell => {
+                      const swatch = <Text key={`sw:${cell.category}`} color={cell.swatch}>█</Text>
+                      const open = () => show($, cell.category)
+                      // A desktop's native button drops the colour of text inside it.
+                      return e.surface === 'terminal' ? (
+                        <Button key={`cat:${cell.category}`} plain dimColor onPress={open}>
+                          {swatch}
+                          {cell.text}
+                        </Button>
+                      ) : (
+                        <Box key={`cell:${cell.category}`}>
+                          {swatch}
+                          <Button key={`cat:${cell.category}`} plain dimColor onPress={open}>
+                            {cell.text}
                           </Button>
-                        ) : (
-                          <Box key={`cell:${r.name}`}>
-                            {swatch}
-                            <Button key={`cat:${r.name}`} plain dimColor onPress={open}>
-                              {text}
-                            </Button>
-                          </Box>
-                        )
-                      })}
-                    </Box>
-                  )
-                })}
+                        </Box>
+                      )
+                    })}
+                  </Box>
+                ))}
               </Box>
             </Box>
           )}
-          {windows.length > 0 && (
-            <Box key="limits" flexDirection="column" borderStyle="round" borderDimColor paddingX={1}>
-              <Text bold>Limits</Text>
-              {windows.map(l => windowText(`d${l.kind}`, l, false))}
-            </Box>
-          )}
-          {hasBusy && (
-            <Box key="busy" flexDirection="column" borderStyle="round" borderDimColor paddingX={1}>
-              <Text bold>Busy time</Text>
-              <Text dimColor>{agentTime(s.busyMs)}</Text>
-              <Text dimColor>{turnsLabel(s.turns)}</Text>
-            </Box>
-          )}
-          {cache && (
-            <Box key="cache" flexDirection="column" borderStyle="round" borderDimColor paddingX={1}>
-              <Text bold>Cache</Text>
-              {cacheText(
-                'cache-state',
-                cache.isWarm ? `warm, ${span(cache.leftMs + 59999)} left` : cache.reason === 'compacted' ? 'cold, compacted' : 'cold',
-              )}
-              <Text dimColor>{`idle ${span(cache.idleMs)}`}</Text>
-              {!cache.isWarm && <Text key="recache" dimColor>{`next message re-caches ~${kTokens(recache)}`}</Text>}
-            </Box>
-          )}
+          {b.limits.length > 0 && box('limits', 'Limits', b.limits)}
+          {b.busy && box('busy', 'Busy time', b.busy)}
+          {b.cache && box('cache', 'Cache', b.cache)}
         </Box>
         <Button key="compact" label="[Compact]" plain dimColor onPress={() => update($, compact, () => true)} />
       </Box>
