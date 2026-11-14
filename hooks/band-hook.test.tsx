@@ -1,6 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
-import type { On, SessionRateLimit } from 'claude-code'
+import type { On, SessionMessage, SessionRateLimit } from 'claude-code'
 
 // Sat 14 Nov 2026, 10:00 local time.
 const NOW = new Date(2026, 10, 14, 10, 0).getTime()
@@ -46,16 +46,17 @@ const usage = (messages: number) => ({
 })
 
 // Stands in for the engine beneath the mod, then starts a session at NOW.
-const start = async ($: Engine, on: On, opts: { cap?: string; messages?: number; hooks?: (on: On) => void } = {}) => {
+const start = async ($: Engine, on: On, opts: { cap?: string; ttl?: string; messages?: number; hooks?: (on: On) => void } = {}) => {
   opts.hooks?.(on)
   const clock = mock.clock(on, { now: NOW })
-  on('env.get', () => ({ value: opts.cap }) as never)
+  on('env.get', (_, e) => ({ value: e.name === 'CONTEXT_BAR_CACHE_TTL_MIN' ? opts.ttl : opts.cap }) as never)
   on('session.usage', () => ({ value: usage(opts.messages ?? 60000) }) as never)
   on('session.turns', () => ({ value: 33 }) as never)
   on('command.register', (_, e) => ({ value: { command: e.name } }) as never)
   on('session.start', (_, e) => ({ cwd: e.cwd }))
   on('session.measure', (_, e) => ({ changed: e.changed }))
   on('session.end', (_, e) => ({ sessionId: e.sessionId }))
+  on('session.compact', (_, e) => ({ messages: e.messages }))
   on('turn.complete', (_, e) => ({ text: e.answer }))
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true } as never)
   await clock.settle()
@@ -74,53 +75,29 @@ const LIMITS: SessionRateLimit[] = [
   { kind: 'spend_limit', percentUsed: 99 },
 ]
 
+// What the band says is tested in band.test.ts through band(); these check the hooks that
+// read the engine, draw the parts and answer presses.
+
 const barCells = (text: string) => (text.match(/[█▌░▒]/g) ?? []).length
 
-test('compact at 160 columns: bar, percent, both windows, busy time, turns and Details on one line', async ($, on) => {
+test('compact at 160 columns: bar, percent, both windows, busy time, turns, cache and Details on one line', async ($, on) => {
   await start($, on)
   await measure($, LIMITS)
   await turn($, 3134000)
 
   const ui = await $.ui.mount(band(160))
   const line = (await ui.find({ key: 'compact-line' }))!.text
-  expect(line).toContain(' 34% of 200.0k  5h ▰▰▱▱▱ 38%  wk ▰▰▰▱▱ 62%  busy 52m 14s · 33 turns  [Details]')
+  expect(line).toContain(' 34% of 200.0k  5h ▰▰▱▱▱ 38%  wk ▰▰▰▱▱ 62%  busy 52m 14s · 33 turns  cache 1h left  [Details]')
   expect(line).not.toContain('99%')
   expect(line).not.toContain('↻')
   // The bar takes every cell the band leaves over.
-  expect(barCells(line)).toBe(160 - ' 34% of 200.0k  5h ▰▰▱▱▱ 38%  wk ▰▰▰▱▱ 62%  busy 52m 14s · 33 turns  [Details]'.length)
+  expect(barCells(line)).toBe(160 - ' 34% of 200.0k  5h ▰▰▱▱▱ 38%  wk ▰▰▰▱▱ 62%  busy 52m 14s · 33 turns  cache 1h left  [Details]'.length)
   // Under 70% the windows and the percent label stay quiet.
   expect((await ui.find({ type: 'Text', text: /^5h ▰▰▱▱▱ 38%$/ }))?.props.dimColor).toBe(true)
   expect((await ui.find({ type: 'Text', text: /^ 34% of 200.0k$/ }))?.props.color).toBeUndefined()
   // No legend in compact view.
   expect(await ui.find({ type: 'Button', text: /Messages/ })).toBeUndefined()
   await ui.unmount()
-})
-
-test('compact at 80 columns drops turns, then busy time, and keeps the bar at 20 cells or more', async ($, on) => {
-  await start($, on)
-  await measure($, LIMITS)
-  await turn($, 3134000)
-
-  const ui = await $.ui.mount(band(80))
-  const line = (await ui.find({ key: 'compact-line' }))!.text
-  expect(line).toContain(' 34% of 200.0k  5h ▰▰▱▱▱ 38%  wk ▰▰▰▱▱ 62%  [Details]')
-  expect(line).not.toContain('busy')
-  expect(line).not.toContain('turns')
-  expect(barCells(line)).toBe(27)
-  await ui.unmount()
-
-  const narrow = await $.ui.mount(band(60))
-  const short = (await narrow.find({ key: 'compact-line' }))!.text
-  expect(short).toContain('5h ▰▰▱▱▱ 38%')
-  expect(short).not.toContain('wk')
-  expect(barCells(short)).toBeGreaterThanOrEqual(20)
-  await narrow.unmount()
-
-  const tiny = await $.ui.mount(band(30))
-  const none = (await tiny.find({ key: 'compact-line' }))!.text
-  expect(none).not.toContain('5h')
-  expect(barCells(none)).toBe(20)
-  await tiny.unmount()
 })
 
 test('windows turn yellow at 70%, pink at 90%, and show when they reset', async ($, on) => {
@@ -145,29 +122,12 @@ test('windows turn yellow at 70%, pink at 90%, and show when they reset', async 
   await ui.unmount()
 })
 
-test('the percent label warns at the same thresholds as the windows', async ($, on) => {
-  await start($, on, { messages: 136000 }) // 144k of 200k = 72%
-
-  const ui = await $.ui.mount(band(160))
-  expect((await ui.find({ type: 'Text', text: /^ 72% of 200.0k$/ }))?.props.color).toBe('#FFDB35')
-  await ui.unmount()
-})
-
-test('a window with no reset time shows none', async ($, on) => {
-  await start($, on)
-  await measure($, [{ kind: 'five_hour', percentUsed: 95 }])
-
-  const ui = await $.ui.mount(band(160))
-  expect((await ui.find({ type: 'Text', text: /^5h / }))?.text).toBe('5h ▰▰▰▰▰ 95%')
-  await ui.unmount()
-})
-
 test('off a subscription, or with only a spend limit, the limits are hidden', async ($, on) => {
   await start($, on)
   await turn($, 45000)
 
   const ui = await $.ui.mount(band(160))
-  expect((await ui.find({ key: 'compact-line' }))!.text).toContain(' 34% of 200.0k  busy 45s · 33 turns  [Details]')
+  expect((await ui.find({ key: 'compact-line' }))!.text).toContain(' 34% of 200.0k  busy 45s · 33 turns  cache 1h left  [Details]')
   await ui.press({ key: 'details' })
   expect(await ui.find({ type: 'Text', text: 'Limits' })).toBeUndefined()
   await ui.unmount()
@@ -299,15 +259,6 @@ test('CONTEXT_BAR_MAX_TOKENS still sets what 100% means in the band', async ($, 
   await ui.unmount()
 })
 
-test('used segments are split by a thin gap, and the last one runs into free space', async ($, on) => {
-  await start($, on)
-  const ui = await $.ui.mount(band(160))
-  const segments = await ui.findAll({ type: 'Text', text: /^[█▌]+$/ })
-  expect(segments.map(t => t.text.endsWith('▌'))).toEqual([true, false])
-  expect(segments[0]!.props.color).toBe('#6F02E4')
-  await ui.unmount()
-})
-
 const pane = {
   plugin: 'context-bar',
   surface: 'terminal',
@@ -354,4 +305,86 @@ test('on VS Code the swatch sits beside its cell, since a native button drops co
   expect(cells.map(c => c.text)).toEqual([' Messages 60.0k', ' Prompt    8.0k'])
   expect(JSON.stringify((await ui.find({ key: 'cell:Messages' }))?.children)).toContain('#00BCFF')
   await ui.unmount()
+})
+
+test('the cache counts down from the last main turn, warns in its last 10 minutes, then goes cold', async ($, on) => {
+  const clock = await start($, on)
+  const before = await $.ui.mount(band(160))
+  expect((await before.find({ key: 'compact-line' }))!.text).not.toContain('cache')
+  await before.unmount()
+
+  await turn($, 45000)
+  await clock.advance(13 * MIN)
+  // A subagent's turn does not touch the main thread's cache.
+  await turn($, 1000, 'agent-1')
+  const ui = await $.ui.mount(band(160))
+  expect((await ui.find({ key: 'compact-line' }))!.text).toContain('cache 47m left  [Details]')
+  expect((await ui.find({ type: 'Text', text: /^  cache 47m left$/ }))?.props.dimColor).toBe(true)
+
+  // The band redraws on its own as the minutes pass.
+  await clock.advance(42 * MIN)
+  expect((await ui.find({ key: 'compact-line' }))!.text).toContain('cache 5m left')
+  expect((await ui.find({ type: 'Text', text: /^  cache 5m left$/ }))?.props.color).toBe('#FFDB35')
+
+  await clock.advance(2 * 60 * MIN)
+  expect((await ui.find({ key: 'compact-line' }))!.text).toContain('cache cold · idle 2h 55m')
+  expect((await ui.find({ type: 'Text', text: /^  cache cold/ }))?.props.color).toBe('#FF498E')
+  await ui.unmount()
+
+  // A new main turn warms it again.
+  await turn($, 1000)
+  const warm = await $.ui.mount(band(160))
+  expect((await warm.find({ key: 'compact-line' }))!.text).toContain('cache 1h left')
+  await warm.unmount()
+})
+
+test('Details has a Cache box; CONTEXT_BAR_CACHE_TTL_MIN sets the lifetime; /clear hides it', async ($, on) => {
+  const clock = await start($, on, { ttl: '5' })
+  await turn($, 1000)
+  await clock.advance(2 * MIN)
+  const ui = await $.ui.mount(band(160))
+  await ui.press({ key: 'details' })
+  const box = (await ui.find({ key: 'cache' }))!.text
+  expect(box).toContain('Cache')
+  expect(box).toContain('warm, 3m left')
+  expect(box).toContain('idle 2m')
+  await ui.unmount()
+
+  await $.session.end({ reason: 'clear', sessionId: 's1', resume: {} } as never)
+  const cleared = await $.ui.mount(band(160))
+  expect(await cleared.find({ key: 'cache' })).toBeUndefined()
+  await cleared.unmount()
+})
+
+const SUMMARY: SessionMessage[] = [{ role: 'user', text: 'Summary of the conversation so far', toolUses: [] }]
+
+test('a compaction turns the cache cold at once, until the next main turn re-caches it', async ($, on) => {
+  const clock = await start($, on)
+  await turn($, 1000)
+  await clock.advance(5 * MIN)
+  // A subagent compacting its own transcript, or a precompute, leaves the main cache alone.
+  await $.session.compact({ trigger: 'auto', agentId: 'agent-1', messages: SUMMARY })
+  await $.session.compact({ trigger: 'precompute', messages: SUMMARY })
+  const ui = await $.ui.mount(band(160))
+  expect((await ui.find({ key: 'compact-line' }))!.text).toContain('cache 55m left')
+
+  await $.session.compact({ trigger: 'manual', messages: SUMMARY })
+  await clock.settle()
+  expect((await ui.find({ key: 'compact-line' }))!.text).toContain('cache cold · compacted  [Details]')
+  expect((await ui.find({ type: 'Text', text: /^  cache cold · compacted$/ }))?.props.color).toBe('#FF498E')
+
+  await clock.advance(3 * MIN)
+  await ui.press({ key: 'details' })
+  const box = (await ui.find({ key: 'cache' }))!.text
+  expect(box).toContain('cold, compacted')
+  expect(box).toContain('idle 3m')
+  expect(box).toContain('next message re-caches ~68.0k')
+  await ui.unmount()
+
+  await turn($, 1000)
+  const warm = await $.ui.mount(band(160))
+  const again = (await warm.find({ key: 'cache' }))!.text
+  expect(again).toContain('warm, 1h left')
+  expect(again).not.toContain('re-caches')
+  await warm.unmount()
 })
