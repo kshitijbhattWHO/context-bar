@@ -2,8 +2,9 @@ export type Row = { name: string; tokens: number; kind: 'used' | 'free' | 'buffe
 export type Snapshot = { rows: Row[]; max: number; percent: number }
 export type Line = { category: string; kind: string; name: string; tokens: number; note: string }
 export type Detail = { category: string; lines: Line[] }
-export type Tests = { state: 'none' | 'pass' | 'fail' | 'stale'; passed?: number; failed?: number }
-export type Stats = { turns: number; busyMs: number; tests: Tests; limits: import('claude-code').SessionRateLimit[] }
+// A rate-limit window as session.measure reports it (SessionRateLimit), kept self-contained here.
+export type Limit = { kind: string; percentUsed: number; resetsAt?: string }
+export type Stats = { turns: number; busyMs: number; limits: Limit[] }
 
 declare module 'claude-code' {
   interface PluginState {

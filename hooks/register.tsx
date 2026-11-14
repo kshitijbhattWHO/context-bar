@@ -1,7 +1,9 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, SessionContextBreakdown } from 'claude-code'
 
-import type { Line, Row } from '../types'
+import type { Line, Row, Stats } from '../types'
+import { agentTime, fit, level, levelColour, turnsLabel, windowLabel, windowsOf } from './stats'
+import type { Piece } from './stats'
 
 const PANE = 'context-lines'
 // Hangar 18 palette: primary purple first, then the secondaries, purple-light, white.
@@ -10,6 +12,9 @@ const BRAND = ['#6F02E4', '#00BCFF', '#FF498E', '#FFDB35', '#B876FE', '#FFFFFF']
 const snapshot = atom({ plugin: 'context-bar', key: 'snapshot' } as const, null)
 const isOn = atom({ plugin: 'context-bar', key: 'isOn' } as const, true)
 const detail = atom({ plugin: 'context-bar', key: 'detail' } as const, null)
+const NO_STATS: Stats = { turns: 0, busyMs: 0, limits: [] }
+const stats = atom({ plugin: 'context-bar', key: 'stats' } as const, NO_STATS)
+const compact = atom({ plugin: 'context-bar', key: 'compact' } as const, true)
 
 const kTokens = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : `${n}`)
 const pad = (s: string, w: number) => (s.length >= w ? s : s + ' '.repeat(w - s.length))
@@ -169,8 +174,26 @@ export const register: Register = on => {
 
   on('turn.complete', async ($, e, next) => {
     const result = await next(e)
+    // Busy time and turns count the main conversation only, not subagents running inside it.
+    if (e.agentId === undefined) {
+      const turns = await $.session.turns()
+      await update($, stats, s => ({ ...s, busyMs: s.busyMs + e.durationMs, turns }))
+    }
     if (await read($, isOn)) void refresh($)
     return result
+  })
+
+  // Fires after each main turn and whenever a window moves a whole point.
+  on('session.measure', async ($, e, next) => {
+    if (e.changed.includes('rateLimits')) {
+      await update($, stats, s => ({ ...s, limits: [...e.rateLimits] }))
+    }
+    return next(e)
+  })
+
+  on('session.end', async ($, e, next) => {
+    if (e.reason === 'clear') await update($, stats, s => ({ ...s, busyMs: 0, turns: 0 }))
+    return next(e)
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
@@ -206,25 +229,70 @@ export const register: Register = on => {
     const snap = await read($, snapshot)
     if (e.props.hasSurvey || !snap || !(await read($, isOn))) return next(e)
     const { Box, Button, Text } = $.ui.resolve(e)
+    const s = await read($, stats)
+    const isCompact = await read($, compact)
+    const now = await $.clock.now()
+    const columns = e.props.bodyColumns || e.viewport?.columns || 80
     const label = ` ${Math.round(snap.percent)}% of ${kTokens(snap.max)}`
-    const width = Math.max(10, (e.viewport?.columns ?? 80) - label.length - 1)
-    // Over the cap the used rows fill the whole bar instead of overflowing it.
-    const widths = cells(snap.rows, Math.max(snap.max, snap.rows.reduce((a, r) => a + r.tokens, 0)), width)
+    const labelColour = levelColour(level(snap.percent))
+    const windows = windowsOf(s.limits)
+    const hasBusy = s.turns > 0 || s.busyMs > 0
     const used = snap.rows.filter(r => r.kind === 'used')
     const colour = (r: Row) => BRAND[used.indexOf(r) % BRAND.length]
+
+    const bar = (width: number) => {
+      // Over the cap the used rows fill the whole bar instead of overflowing it.
+      const widths = cells(snap.rows, Math.max(snap.max, snap.rows.reduce((a, r) => a + r.tokens, 0)), width)
+      return snap.rows.map((r, i) =>
+        r.kind === 'used' ? (
+          <Text key={`s${i}`} color={colour(r)}>{'█'.repeat(widths[i] ?? 0)}</Text>
+        ) : (
+          <Text key={`s${i}`} dimColor>{(r.kind === 'free' ? '░' : '▒').repeat(widths[i] ?? 0)}</Text>
+        ),
+      )
+    }
+    const percent = labelColour ? <Text key="pct" color={labelColour}>{label}</Text> : <Text key="pct">{label}</Text>
+    const windowText = (key: string, l: (typeof windows)[number], short: boolean) => {
+      const c = levelColour(level(l.percentUsed))
+      const text = windowLabel(l, now, short)
+      return c ? <Text key={key} color={c}>{text}</Text> : <Text key={key} dimColor>{text}</Text>
+    }
+
+    if (isCompact) {
+      const GAP = '  '
+      const details = '[Details]'
+      const busy = `${GAP}busy ${agentTime(s.busyMs)}`
+      const turns = ` · ${turnsLabel(s.turns)}`
+      // In drop order: turns, busy time, weekly window, 5-hour window.
+      const pieces: Piece[] = [
+        ...(hasBusy ? [{ id: 'turns', width: turns.length }, { id: 'busy', width: busy.length }] : []),
+        ...[...windows].reverse().map(l => ({ id: l.kind, width: GAP.length + windowLabel(l, now, true).length })),
+      ]
+      const { keep, bar: barWidth } = fit(columns, label.length + GAP.length + details.length, pieces)
+      return (
+        <Box key="compact-line">
+          <Text>
+            {bar(barWidth)}
+            {percent}
+            {windows
+              .filter(l => keep.includes(l.kind))
+              .flatMap(l => [<Text key={`g${l.kind}`}>{GAP}</Text>, windowText(`w${l.kind}`, l, true)])}
+            {keep.includes('busy') && <Text key="busy" dimColor>{busy}</Text>}
+            {keep.includes('turns') && <Text key="turns" dimColor>{turns}</Text>}
+            {GAP}
+          </Text>
+          <Button key="details" label={details} plain dimColor onPress={() => update($, compact, () => false)} />
+        </Box>
+      )
+    }
+
     return (
-      <Box flexDirection="column">
+      <Box key="detail-view" flexDirection="column">
         <Text>
-          {snap.rows.map((r, i) =>
-            r.kind === 'used' ? (
-              <Text key={`s${i}`} color={colour(r)}>{'█'.repeat(widths[i] ?? 0)}</Text>
-            ) : (
-              <Text key={`s${i}`} dimColor>{(r.kind === 'free' ? '░' : '▒').repeat(widths[i] ?? 0)}</Text>
-            ),
-          )}
-          {label}
+          {bar(Math.max(20, columns - label.length - 1))}
+          {percent}
         </Text>
-        <Box flexWrap="wrap">
+        <Box key="legend" flexWrap="wrap">
           {used.map((r, i) => (
             <Box key={`g${i}`}>
               <Text color={colour(r)}>█</Text>
@@ -232,6 +300,24 @@ export const register: Register = on => {
             </Box>
           ))}
         </Box>
+        {(windows.length > 0 || hasBusy) && (
+          <Box key="boxes" flexWrap="wrap">
+            {windows.length > 0 && (
+              <Box key="limits" flexDirection="column" borderStyle="round" borderDimColor paddingX={1}>
+                <Text bold>Limits</Text>
+                {windows.map(l => windowText(`d${l.kind}`, l, false))}
+              </Box>
+            )}
+            {hasBusy && (
+              <Box key="busy" flexDirection="column" borderStyle="round" borderDimColor paddingX={1}>
+                <Text bold>Busy time</Text>
+                <Text dimColor>{agentTime(s.busyMs)}</Text>
+                <Text dimColor>{turnsLabel(s.turns)}</Text>
+              </Box>
+            )}
+          </Box>
+        )}
+        <Button key="compact" label="[Compact]" plain dimColor onPress={() => update($, compact, () => true)} />
       </Box>
     )
   })
