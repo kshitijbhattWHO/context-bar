@@ -16,7 +16,7 @@ const rows = (messages: number): Row[] => [
   { name: 'Messages', tokens: messages, kind: 'used' },
   { name: 'Free space', tokens: 192000 - messages, kind: 'free' },
 ]
-const SNAP: Snapshot = { rows: rows(60000), max: 200000, percent: 34 }
+const SNAP: Snapshot = { rows: rows(60000), max: 200000, percent: 34, usedTokens: 68000 }
 const NO_STATS: Stats = { turns: 0, busyMs: 0, limits: [] }
 const LIMITS: Limit[] = [
   { kind: 'five_hour', percentUsed: 38, resetsAt: at(100 * MIN) },
@@ -81,7 +81,7 @@ test('the bar splits its cells by tokens, ends a used segment that meets another
   expect(bar[1]!.colour).toBe('#00BCFF')
   expect(bar[2]).toMatchObject({ text: expect.stringMatching(/^░+$/), dim: true })
 
-  const over: Snapshot = { rows: [{ name: 'Messages', tokens: 300000, kind: 'used' }], max: 150000, percent: 200 }
+  const over: Snapshot = { rows: [{ name: 'Messages', tokens: 300000, kind: 'used' }], max: 150000, percent: 200, usedTokens: 300000 }
   const full = detailOf({ snapshot: over, columns: 60 }).bar
   expect(full[0]!.text).toBe('█'.repeat(60 - ' 200% of 150.0k'.length - 1))
 })
@@ -164,6 +164,7 @@ test('Details: Context cells, largest first in 2 rows, padded per column, each w
     ],
     max: 200000,
     percent: 40,
+    usedTokens: 80000,
   }
   expect(detailOf({ snapshot: snap }).context).toEqual([
     [

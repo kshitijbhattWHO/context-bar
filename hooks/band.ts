@@ -230,8 +230,6 @@ export const band = ({ snapshot: snap, stats: s, compact, now, ttlMs, columns }:
       swatch: colourOf(used, r),
     }))
   })
-  // What the next request sends again: everything in the window now.
-  const recache = used.reduce((a, r) => a + r.tokens, 0)
   return {
     view: 'detail',
     bar: [...barParts(snap, Math.max(20, columns - label.length - 1)), percent],
@@ -250,7 +248,7 @@ export const band = ({ snapshot: snap, stats: s, compact, now, ttlMs, columns }:
         cache.colour,
       ),
       { id: 'idle', text: `idle ${span(cache.idleMs)}`, dim: true },
-      ...(cache.isWarm ? [] : [{ id: 'recache', text: `next message re-caches ~${kTokens(recache)}`, dim: true }]),
+      ...(cache.isWarm ? [] : [{ id: 'recache', text: `next message re-caches ~${kTokens(snap.usedTokens)}`, dim: true }]),
     ],
   }
 }

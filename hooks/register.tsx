@@ -4,6 +4,7 @@ import type { EngineInterface, Register, SessionContextBreakdown } from 'claude-
 import type { Line, Row, Stats, Tab } from '../types'
 import { bySize, colourOf, kTokens, lpad, pad, shortName, wrappedRows } from './categories'
 import { band } from './band'
+import { measure } from './measure'
 import type { Part } from './band'
 
 const PANE = 'context-lines'
@@ -27,33 +28,17 @@ const ttlOf = async ($: EngineInterface) => {
 const breakdownOf = async ($: EngineInterface, detail: 'summary' | 'full' = 'summary') =>
   (await $.session.usage({ breakdown: detail })).context.breakdown
 
-// CONTEXT_BAR_MAX_TOKENS is the budget for Messages: 100% is whatever loads up front
-// (system prompt, tools, memory, skills...) plus that many message tokens.
-const capOf = async ($: EngineInterface, b: SessionContextBreakdown) => {
+// CONTEXT_BAR_MAX_TOKENS sets the message budget; absent, 100% is the engine's window.
+const budgetOf = async ($: EngineInterface) => {
   const n = Number(await $.env.get('CONTEXT_BAR_MAX_TOKENS'))
-  if (!(n > 0)) return b.rawMaxTokens
-  const base = b.categories
-    .filter(c => c.kind === 'used' && c.name !== 'Messages')
-    .reduce((a, c) => a + c.tokens, 0)
-  return base + n
+  return n > 0 ? n : undefined
 }
 
 const refresh = async ($: EngineInterface) => {
   const b = await breakdownOf($)
   if (!b) return
-  let rows: Row[] = b.categories
-    .filter(c => c.kind !== 'deferred' && c.tokens > 0)
-    .map(c => ({ name: c.name, tokens: c.tokens, kind: c.kind as Row['kind'] }))
-  const max = await capOf($, b)
-  if (max === b.rawMaxTokens) {
-    await update($, snapshot, () => ({ rows, max, percent: b.percentage }))
-    return
-  }
-  // Capped: drop the engine's free/buffer rows and refill free space up to the cap.
-  const used = rows.filter(r => r.kind === 'used')
-  const total = used.reduce((a, r) => a + r.tokens, 0)
-  rows = [...used, { name: 'Free space', tokens: Math.max(0, max - total), kind: 'free' }]
-  await update($, snapshot, () => ({ rows, max, percent: (total / max) * 100 }))
+  const snap = measure(b, await budgetOf($))
+  await update($, snapshot, () => snap)
 }
 
 const lines = async ($: EngineInterface, b: SessionContextBreakdown, withTools: boolean) => {
@@ -157,10 +142,9 @@ export const register: Register = on => {
     const deferred = b.categories.find(c => c.kind === 'deferred')
     const shown = all.slice(0, top)
     const w = Math.min(60, Math.max(10, ...shown.map(l => l.name.length)))
-    const max = await capOf($, b)
-    const percent = max === b.rawMaxTokens ? b.percentage : (b.totalTokens / max) * 100
+    const m = measure(b, await budgetOf($))
     const out = [
-      `Context: ${kTokens(b.totalTokens)} of ${kTokens(max)} (${Math.round(percent)}%)`,
+      `Context: ${kTokens(m.usedTokens)} of ${kTokens(m.max)} (${Math.round(m.percent)}%)`,
       used.map(c => `${c.name} ${kTokens(c.tokens)}`).join(' | '),
       deferred ? `Deferred (outside the window, loaded on demand): ${kTokens(deferred.tokens)}` : '',
       `Top ${Math.min(top, all.length)} of ${all.length} lines by tokens:`,
