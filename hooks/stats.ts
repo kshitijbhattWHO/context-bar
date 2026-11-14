@@ -77,41 +77,6 @@ export const fit = (columns: number, fixed: number, droppable: readonly Piece[])
   return { keep: kept.map(p => p.id), bar: Math.max(MIN_BAR, room()) }
 }
 
-const SHORT: Record<string, string> = {
-  'System prompt': 'Prompt',
-  'System tools': 'Tools',
-  'MCP server instructions': 'MCP',
-  'Memory files': 'Memory',
-}
-
-// The label a category gets in the Context box and the pane's tabs.
-export const shortName = (name: string) => SHORT[name] ?? name
-
-// The Context box's cells: 2 rows, largest first, filled down each column.
-// Largest first: the order of the Context box's cells and of the pane's tabs.
-export const bySize = <T extends { tokens: number }>(items: readonly T[]) => [...items].sort((a, b) => b.tokens - a.tokens)
-
-export const columnsOf = <T extends { tokens: number }>(items: readonly T[]): T[][] => {
-  const sorted = bySize(items)
-  const out: T[][] = []
-  for (let i = 0; i < sorted.length; i += 2) out.push(sorted.slice(i, i + 2))
-  return out
-}
-
-// Rows a wrapping run of items takes: an item that doesn't fit what's left of a row starts the next.
-export const wrappedRows = (widths: readonly number[], columns: number) => {
-  let rows = 0
-  let left = 0
-  for (const w of widths) {
-    if (rows === 0 || w > left) {
-      rows++
-      left = columns
-    }
-    left -= w
-  }
-  return rows
-}
-
 // A length of time to the minute: `48m`, `2h 13m`, `3d 4h`.
 export const span = (ms: number) => {
   const m = Math.max(0, Math.floor(ms / 60000))

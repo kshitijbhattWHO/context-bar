@@ -2,29 +2,11 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, SessionContextBreakdown } from 'claude-code'
 
 import type { Line, Row, Stats, Tab } from '../types'
-import {
-  agentTime,
-  bySize,
-  CACHE_TTL_MIN,
-  cacheLabel,
-  cacheOf,
-  columnsOf,
-  fit,
-  level,
-  levelColour,
-  segment,
-  shortName,
-  span,
-  turnsLabel,
-  windowLabel,
-  windowsOf,
-  wrappedRows,
-} from './stats'
+import { bySize, colourOf, columnsOf, kTokens, lpad, pad, shortName, wrappedRows } from './categories'
+import { agentTime, CACHE_TTL_MIN, cacheLabel, cacheOf, fit, level, levelColour, segment, span, turnsLabel, windowLabel, windowsOf } from './stats'
 import type { Piece } from './stats'
 
 const PANE = 'context-lines'
-// Hangar 18 palette: primary purple first, then the secondaries, purple-light, white.
-const BRAND = ['#6F02E4', '#00BCFF', '#FF498E', '#FFDB35', '#B876FE', '#FFFFFF']
 
 const snapshot = atom({ plugin: 'context-bar', key: 'snapshot' } as const, null)
 const isOn = atom({ plugin: 'context-bar', key: 'isOn' } as const, true)
@@ -39,9 +21,6 @@ const ttlOf = async ($: EngineInterface) => {
   return (n > 0 ? n : CACHE_TTL_MIN) * 60000
 }
 
-const kTokens = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : `${n}`)
-const pad = (s: string, w: number) => (s.length >= w ? s : s + ' '.repeat(w - s.length))
-const lpad = (s: string, w: number) => (s.length >= w ? s : ' '.repeat(w - s.length) + s)
 
 // Largest-remainder split: the cells always add up to exactly `width`.
 const cells = (rows: Row[], max: number, width: number) => {
@@ -144,8 +123,6 @@ const lines = async ($: EngineInterface, b: SessionContextBreakdown, withTools: 
   return out.sort((a, b) => b.tokens - a.tokens)
 }
 
-// Each used category keeps its colour by its place in the bar.
-const colourOf = (used: readonly Row[], r: Row) => BRAND[used.indexOf(r) % BRAND.length]!
 
 const show = async ($: EngineInterface, category: string) => {
   const b = await breakdownOf($, 'full')

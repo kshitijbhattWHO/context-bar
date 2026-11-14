@@ -9,7 +9,7 @@ The repository or folder Claude Code is working in for this session. Not the mod
 _Avoid_: the project (ambiguous with this repo)
 
 **Band**:
-The stats shown beside the context bar: rate limits, busy time and the cache countdown. It does not track the working project's tests.
+The whole row above the prompt: the context bar and its percent, then the stats beside it (rate limits, busy time, the cache countdown). In compact view it is one line; Details opens it into boxes. It does not track the working project's tests.
 
 **Rate-limit window**:
 One of the account's usage limits, such as the 5-hour window or the weekly window, shown as how full it is and when it resets.
