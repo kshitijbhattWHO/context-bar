@@ -59,6 +59,10 @@ export const agentTime = (ms: number) => {
 
 export const turnsLabel = (n: number) => `${n} ${n === 1 ? 'turn' : 'turns'}`
 
+// One used segment of the bar; `isBreak` ends it in a half block so the next colour starts after a gap.
+export const segment = (width: number, isBreak: boolean) =>
+  width <= 0 ? '' : isBreak ? '█'.repeat(width - 1) + '▌' : '█'.repeat(width)
+
 export const MIN_BAR = 20
 
 export type Piece = { id: string; width: number }

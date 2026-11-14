@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { agentTime, fit, level, levelColour, meter, resetLabel, turnsLabel, windowLabel, windowsOf } from './stats'
+import { agentTime, fit, level, levelColour, meter, resetLabel, segment, turnsLabel, windowLabel, windowsOf } from './stats'
 
 const NOW = new Date(2026, 10, 14, 10, 0).getTime() // Sat 14 Nov 2026, 10:00 local
 const inMs = (ms: number) => new Date(NOW + ms).toISOString()
@@ -75,4 +75,11 @@ test('a narrow line drops turns, then busy time, then weekly, then 5h', async ()
   expect(fit(70, 25, pieces)).toEqual({ keep: ['5h'], bar: 31 })
   expect(fit(50, 25, pieces)).toEqual({ keep: [], bar: 25 })
   expect(fit(30, 25, pieces)).toEqual({ keep: [], bar: 20 })
+})
+
+test('a segment that meets another ends in a half block', async () => {
+  expect(segment(4, true)).toBe('███▌')
+  expect(segment(4, false)).toBe('████')
+  expect(segment(1, true)).toBe('▌')
+  expect(segment(0, true)).toBe('')
 })

@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, SessionContextBreakdown } from 'claude-code'
 
 import type { Line, Row, Stats } from '../types'
-import { agentTime, fit, level, levelColour, turnsLabel, windowLabel, windowsOf } from './stats'
+import { agentTime, fit, level, levelColour, segment, turnsLabel, windowLabel, windowsOf } from './stats'
 import type { Piece } from './stats'
 
 const PANE = 'context-lines'
@@ -243,9 +243,11 @@ export const register: Register = on => {
     const bar = (width: number) => {
       // Over the cap the used rows fill the whole bar instead of overflowing it.
       const widths = cells(snap.rows, Math.max(snap.max, snap.rows.reduce((a, r) => a + r.tokens, 0)), width)
+      // A used segment that meets another used one ends in a half block, leaving a thin gap.
+      const nextShown = (i: number) => snap.rows.find((_, j) => j > i && (widths[j] ?? 0) > 0)
       return snap.rows.map((r, i) =>
         r.kind === 'used' ? (
-          <Text key={`s${i}`} color={colour(r)}>{'█'.repeat(widths[i] ?? 0)}</Text>
+          <Text key={`s${i}`} color={colour(r)}>{segment(widths[i] ?? 0, nextShown(i)?.kind === 'used')}</Text>
         ) : (
           <Text key={`s${i}`} dimColor>{(r.kind === 'free' ? '░' : '▒').repeat(widths[i] ?? 0)}</Text>
         ),
