@@ -111,3 +111,45 @@ export const wrappedRows = (widths: readonly number[], columns: number) => {
   }
   return rows
 }
+
+// A length of time to the minute: `48m`, `2h 13m`, `3d 4h`.
+export const span = (ms: number) => {
+  const m = Math.max(0, Math.floor(ms / 60000))
+  const h = Math.floor(m / 60)
+  const d = Math.floor(h / 24)
+  return d > 0 ? `${d}d ${h % 24}h` : h > 0 ? (m % 60 ? `${h}h ${m % 60}m` : `${h}h`) : `${m}m`
+}
+
+// Prompt cache lifetime on a subscription; CONTEXT_BAR_CACHE_TTL_MIN overrides it.
+export const CACHE_TTL_MIN = 60
+
+export type Cache = {
+  isWarm: boolean
+  leftMs: number
+  idleMs: number
+  colour?: string
+  // Why a cold cache is cold: its lifetime ran out, or a compaction rewrote the conversation it held.
+  reason?: 'expired' | 'compacted'
+}
+
+// The prompt cache, counted from the end of the last main turn: warm until the TTL runs out,
+// yellow in its last 10 minutes, pink once it has gone cold. A compaction since then makes it
+// cold at once, since the compacted conversation was never cached. Nothing to show before a turn.
+export const cacheOf = (s: { lastAt?: number; compactedAt?: number }, now: number, ttlMs: number): Cache | undefined => {
+  if (s.compactedAt !== undefined) {
+    return { isWarm: false, leftMs: 0, idleMs: Math.max(0, now - s.compactedAt), colour: CRITICAL, reason: 'compacted' }
+  }
+  if (s.lastAt === undefined) return undefined
+  const idleMs = Math.max(0, now - s.lastAt)
+  const leftMs = ttlMs - idleMs
+  if (leftMs <= 0) return { isWarm: false, leftMs: 0, idleMs, colour: CRITICAL, reason: 'expired' }
+  return { isWarm: true, leftMs, idleMs, colour: leftMs <= 10 * 60000 ? WARN : undefined }
+}
+
+// The compact line's text: `cache 48m left`, `cache cold · idle 2h 13m`, or `cache cold · compacted`.
+export const cacheLabel = (c: Cache) =>
+  c.isWarm
+    ? `cache ${span(c.leftMs + 59999)} left`
+    : c.reason === 'compacted'
+      ? 'cache cold · compacted'
+      : `cache cold · idle ${span(c.idleMs)}`

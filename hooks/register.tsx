@@ -2,7 +2,24 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, SessionContextBreakdown } from 'claude-code'
 
 import type { Line, Row, Stats, Tab } from '../types'
-import { agentTime, bySize, columnsOf, fit, level, levelColour, segment, shortName, turnsLabel, windowLabel, windowsOf, wrappedRows } from './stats'
+import {
+  agentTime,
+  bySize,
+  CACHE_TTL_MIN,
+  cacheLabel,
+  cacheOf,
+  columnsOf,
+  fit,
+  level,
+  levelColour,
+  segment,
+  shortName,
+  span,
+  turnsLabel,
+  windowLabel,
+  windowsOf,
+  wrappedRows,
+} from './stats'
 import type { Piece } from './stats'
 
 const PANE = 'context-lines'
@@ -15,6 +32,12 @@ const detail = atom({ plugin: 'context-bar', key: 'detail' } as const, null)
 const NO_STATS: Stats = { turns: 0, busyMs: 0, limits: [] }
 const stats = atom({ plugin: 'context-bar', key: 'stats' } as const, NO_STATS)
 const compact = atom({ plugin: 'context-bar', key: 'compact' } as const, true)
+const tick = atom({ plugin: 'context-bar', key: 'tick' } as const, 0)
+
+const ttlOf = async ($: EngineInterface) => {
+  const n = Number(await $.env.get('CONTEXT_BAR_CACHE_TTL_MIN'))
+  return (n > 0 ? n : CACHE_TTL_MIN) * 60000
+}
 
 const kTokens = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : `${n}`)
 const pad = (s: string, w: number) => (s.length >= w ? s : s + ' '.repeat(w - s.length))
@@ -143,6 +166,11 @@ export const register: Register = on => {
       argumentHint: '[top N, default 40] [all]',
     })
     void refresh($)
+    // The cache countdown moves with the clock, not with any event: redraw each minute.
+    $.clock.every(60000, async () => {
+      const s = await read($, stats)
+      if (s.lastAt !== undefined || s.compactedAt !== undefined) await update($, tick, n => n + 1)
+    })
     return next(e)
   })
 
@@ -183,7 +211,8 @@ export const register: Register = on => {
     // Busy time and turns count the main conversation only, not subagents running inside it.
     if (e.agentId === undefined) {
       const turns = await $.session.turns()
-      await update($, stats, s => ({ ...s, busyMs: s.busyMs + e.durationMs, turns }))
+      const lastAt = await $.clock.now()
+      await update($, stats, s => ({ ...s, busyMs: s.busyMs + e.durationMs, turns, lastAt, compactedAt: undefined }))
     }
     if (await read($, isOn)) void refresh($)
     return result
@@ -197,8 +226,19 @@ export const register: Register = on => {
     return next(e)
   })
 
+  // A compaction of the main conversation leaves nothing the cache holds: cold until the next main turn.
+  on('session.compact', async ($, e, next) => {
+    const result = await next(e)
+    if (e.agentId === undefined && e.trigger !== 'precompute' && result.skip === undefined) {
+      const compactedAt = await $.clock.now()
+      await update($, stats, s => ({ ...s, compactedAt }))
+      if (await read($, isOn)) void refresh($)
+    }
+    return result
+  })
+
   on('session.end', async ($, e, next) => {
-    if (e.reason === 'clear') await update($, stats, s => ({ ...s, busyMs: 0, turns: 0 }))
+    if (e.reason === 'clear') await update($, stats, s => ({ ...s, busyMs: 0, turns: 0, lastAt: undefined, compactedAt: undefined }))
     return next(e)
   })
 
@@ -270,13 +310,19 @@ export const register: Register = on => {
     const { Box, Button, Text } = $.ui.resolve(e)
     const s = await read($, stats)
     const isCompact = await read($, compact)
+    await read($, tick)
     const now = await $.clock.now()
+    const cache = cacheOf(s, now, await ttlOf($))
+    const cacheText = (key: string, text: string) =>
+      cache?.colour ? <Text key={key} color={cache.colour}>{text}</Text> : <Text key={key} dimColor>{text}</Text>
     const columns = e.props.bodyColumns || e.viewport?.columns || 80
     const label = ` ${Math.round(snap.percent)}% of ${kTokens(snap.max)}`
     const labelColour = levelColour(level(snap.percent))
     const windows = windowsOf(s.limits)
     const hasBusy = s.turns > 0 || s.busyMs > 0
     const used = snap.rows.filter(r => r.kind === 'used')
+    // What the next request sends again: everything in the window now.
+    const recache = used.reduce((a, r) => a + r.tokens, 0)
     const colour = (r: Row) => colourOf(used, r)
 
     const bar = (width: number) => {
@@ -304,10 +350,15 @@ export const register: Register = on => {
       const details = '[Details]'
       const busy = `${GAP}busy ${agentTime(s.busyMs)}`
       const turns = ` · ${turnsLabel(s.turns)}`
-      // In drop order: turns, busy time, weekly window, 5-hour window.
+      const cacheLine = cache && `${GAP}${cacheLabel(cache)}`
+      // In drop order: turns, busy time, weekly window, cache, 5-hour window.
+      const [fiveHour, weekly] = [windows.filter(l => l.kind === 'five_hour'), windows.filter(l => l.kind !== 'five_hour')]
+      const windowPiece = (l: (typeof windows)[number]) => ({ id: l.kind, width: GAP.length + windowLabel(l, now, true).length })
       const pieces: Piece[] = [
         ...(hasBusy ? [{ id: 'turns', width: turns.length }, { id: 'busy', width: busy.length }] : []),
-        ...[...windows].reverse().map(l => ({ id: l.kind, width: GAP.length + windowLabel(l, now, true).length })),
+        ...weekly.map(windowPiece),
+        ...(cacheLine ? [{ id: 'cache', width: cacheLine.length }] : []),
+        ...fiveHour.map(windowPiece),
       ]
       const { keep, bar: barWidth } = fit(columns, label.length + GAP.length + details.length, pieces)
       return (
@@ -320,6 +371,7 @@ export const register: Register = on => {
               .flatMap(l => [<Text key={`g${l.kind}`}>{GAP}</Text>, windowText(`w${l.kind}`, l, true)])}
             {keep.includes('busy') && <Text key="busy" dimColor>{busy}</Text>}
             {keep.includes('turns') && <Text key="turns" dimColor>{turns}</Text>}
+            {cacheLine && keep.includes('cache') && cacheText('cache', cacheLine)}
             {GAP}
           </Text>
           <Button key="details" label={details} plain dimColor onPress={() => update($, compact, () => false)} />
@@ -379,6 +431,17 @@ export const register: Register = on => {
               <Text bold>Busy time</Text>
               <Text dimColor>{agentTime(s.busyMs)}</Text>
               <Text dimColor>{turnsLabel(s.turns)}</Text>
+            </Box>
+          )}
+          {cache && (
+            <Box key="cache" flexDirection="column" borderStyle="round" borderDimColor paddingX={1}>
+              <Text bold>Cache</Text>
+              {cacheText(
+                'cache-state',
+                cache.isWarm ? `warm, ${span(cache.leftMs + 59999)} left` : cache.reason === 'compacted' ? 'cold, compacted' : 'cold',
+              )}
+              <Text dimColor>{`idle ${span(cache.idleMs)}`}</Text>
+              {!cache.isWarm && <Text key="recache" dimColor>{`next message re-caches ~${kTokens(recache)}`}</Text>}
             </Box>
           )}
         </Box>
